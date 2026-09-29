@@ -1,0 +1,11 @@
+{
+  "video_id": "vid_abc123",
+  "processed_at": "2026-09-28T10:00:00Z",
+  "duration_sec": 142,
+  "resolution": "1920x1080",
+  "scenes": [
+    { "t": 0,   "label": "intro",   "confidence": 0.98 },
+    { "t": 45,  "label": "product", "confidence": 0.91 },
+    { "t": 120, "label": "outro",   "confidence": 0.95 }
+  ]
+}
