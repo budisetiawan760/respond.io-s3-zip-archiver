@@ -1,0 +1,10 @@
+{
+  "name": "s3-zip-archiver",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Compress new S3 objects to ZIP and archive them back to the bucket",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "archiver": "^7.0.1"
+  }
+}
