@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Archives newly uploaded S3 objects by compressing them to ZIP and deleting the
+  originals. The Lambda runs in private subnets of a VPC defined in this same stack,
+  and reaches S3 through a Gateway Endpoint (not a NAT Gateway).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: s3-zip-archiver
+
+Globals:
+  Function:
+    Timeout: 60
+    MemorySize: 1024
+
+Resources:
+
+  # ── Networking ──────────────────────────────────────────────────────────────
+  # VPC with no Internet Gateway and no NAT Gateway. The Lambda needs no internet;
+  # the only service it calls is S3, which the Gateway Endpoint serves.
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-vpc" }]
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [10.20.0.0/16, 2, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-a" }]
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [1, !Cidr [10.20.0.0/16, 2, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-b" }]
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: !Sub "${ProjectName}-private-rt" }]
+
+  PrivateSubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetA, RouteTableId: !Ref PrivateRouteTable }
+
+  PrivateSubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
+
+  # The S3 Gateway Endpoint is free, with no per-GB charge.
+  # A NAT Gateway would bill $0.045/GB, which at 7.2 PB/month is ~$324,000/month.
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref Vpc
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds: [!Ref PrivateRouteTable]
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Lambda in private subnets; HTTPS egress to S3 only
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS to S3 via the gateway endpoint
+
+  # ── Storage ─────────────────────────────────────────────────────────────────
+  ArchiveBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-${AWS::AccountId}-${AWS::Region}"
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      # Versioning stays on for rollback safety. This rule caps what it costs:
+      # old versions (e.g. a zip replaced by a re-upload) expire after 7 days.
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 7 }
+            ExpiredObjectDeleteMarker: true
+
+  # ── Compute ─────────────────────────────────────────────────────────────────
+  ArchiverFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      DockerContext: ./src
+      Dockerfile: Dockerfile
+    Properties:
+      PackageType: Image
+      Architectures: [arm64]          # Graviton: ~20% cheaper per GB-second
+      AutoPublishAlias: live          # new version + alias on every deploy => rollback
+      VpcConfig:
+        SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+        SecurityGroupIds: [!Ref LambdaSecurityGroup]
+      Policies:
+        # Least privilege. DeleteObjectVersion is needed because app.mjs deletes by versionId.
+        # The bucket ARN is built with !Sub, not !GetAtt, to avoid a circular dependency
+        # (bucket notification -> function -> role -> bucket).
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:GetObjectVersion
+                - s3:PutObject
+                - s3:DeleteObjectVersion
+              Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${AWS::AccountId}-${AWS::Region}/*"
+        - VPCAccessPolicy: {}
+      Events:
+        ObjectCreated:
+          Type: S3
+          Properties:
+            Bucket: !Ref ArchiveBucket
+            Events: s3:ObjectCreated:*
+            # First loop guard. The second is in app.mjs.
+            Filter:
+              S3Key:
+                Rules:
+                  - { Name: suffix, Value: .json }
+
+Outputs:
+  BucketName:
+    Description: Bucket that is watched and archived
+    Value: !Ref ArchiveBucket
+  FunctionAlias:
+    Description: Live alias; repoint it here to roll back
+    Value: !Ref ArchiverFunction.Alias
