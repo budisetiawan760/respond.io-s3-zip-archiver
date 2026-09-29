@@ -13,7 +13,9 @@ Parameters:
 Globals:
   Function:
     Timeout: 60
-    MemorySize: 1024
+    # Benchmarked 256-1769 MB (see README, Task 4). 512 MB is 19% cheaper per file than
+    # 1024 MB and handles 80 MB files; 256 MB costs the same and fails on them.
+    MemorySize: 512
 
 Resources:
 
@@ -57,7 +59,8 @@ Resources:
     Properties: { SubnetId: !Ref PrivateSubnetB, RouteTableId: !Ref PrivateRouteTable }
 
   # The S3 Gateway Endpoint is free, with no per-GB charge.
-  # A NAT Gateway would bill $0.045/GB, which at 7.2 PB/month is ~$324,000/month.
+  # A NAT Gateway in ap-southeast-1 bills $0.059/GB in both directions: ~8 PB/month
+  # (10 MB down + ~1 MB zip up per file) would cost ~$473,000/month.
   S3GatewayEndpoint:
     Type: AWS::EC2::VPCEndpoint
     Properties:
