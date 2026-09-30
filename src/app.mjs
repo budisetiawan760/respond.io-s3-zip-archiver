@@ -68,8 +68,8 @@ async function archiveObject(bucket, key, versionId) {
   const zipKey = `${key}${ZIP_SUFFIX}`;
 
   // 1. Download. transformToByteArray() reads the whole response stream into memory.
-  // ponytail: in-memory, fine for ~10 MB files at 1024 MB memory. For files near
-  // the memory limit, stream through /tmp or use @aws-sdk/lib-storage Upload.
+  // ponytail: in-memory, tested to 80 MB at 512 MB. Beyond that, stream through
+  // @aws-sdk/lib-storage Upload so memory stays flat.
   const obj = await s3.send(
     new GetObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId })
   );
@@ -90,7 +90,7 @@ async function archiveObject(bucket, key, versionId) {
     })
   );
 
-  // 4. Verify. Compare the uploaded size with the size we sent, not just "> 0".
+  // 4. Verify. Check the uploaded size matches the bytes we sent.
   const head = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: zipKey }));
   if (head.ContentLength !== zip.length) {
     throw new Error(

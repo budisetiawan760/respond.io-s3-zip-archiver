@@ -129,7 +129,7 @@ Resources:
                 - s3:PutObject
                 - s3:DeleteObjectVersion
               Resource: !Sub "arn:${AWS::Partition}:s3:::${ProjectName}-${AWS::AccountId}-${AWS::Region}/*"
-        - VPCAccessPolicy: {}
+        # No VPC policy needed: SAM attaches AWSLambdaVPCAccessExecutionRole because VpcConfig is set.
       Events:
         ObjectCreated:
           Type: S3

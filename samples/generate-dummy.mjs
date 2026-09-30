@@ -38,5 +38,6 @@ const doc = {
   })),
 };
 
-writeFileSync(outFile, JSON.stringify(doc, null, 2));
-console.log(`${outFile}: ${sceneCount} scenes, ${(JSON.stringify(doc).length / 1024).toFixed(1)} KB`);
+const out = JSON.stringify(doc, null, 2);
+writeFileSync(outFile, out);
+console.log(`${outFile}: ${sceneCount} scenes, ${(out.length / 1024).toFixed(1)} KB`);
